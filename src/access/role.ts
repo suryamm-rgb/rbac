@@ -1,3 +1,240 @@
+import type { Access, AccessArgs, CollectionSlug } from 'payload'
+import type { User } from '@/payload-types'
+
+/**
+ * Check if user has one of the specified roles
+ */
+export const hasRole = (roles: string[]) => {
+  return ({ req: { user } }: AccessArgs<User>): boolean => {
+    if (!user) return false
+    return roles.includes(user.role)
+  }
+}
+
+/**
+ * Admin only access
+ */
+export const adminOnly: Access = hasRole(['admin'])
+
+/**
+ * Admin or Editor access
+ */
+export const adminOrEditor: Access = hasRole(['admin', 'editor'])
+
+/**
+ * Admin, Editor, or Analyst read access (for submission collections)
+ */
+export const canReadSubmissions: Access = hasRole(['admin', 'editor', 'analyst'])
+
+/**
+ * Can delete documents
+ * - Admin: can delete anything
+ * - Editor: can delete own documents OR legacy documents (no createdBy)
+ * - Contributor: can delete own documents OR legacy documents (no createdBy)
+ * - Viewer: cannot delete
+ */
+export const canDelete = (collection: CollectionSlug): Access => {
+  return async ({ req: { user, payload }, id }) => {
+    if (!user) return false
+
+    // Admin can delete anything
+    if (user.role === 'admin') return true
+
+    // Editor and Contributor can delete own documents OR legacy documents (no createdBy)
+    if (['editor', 'contributor'].includes(user.role || '')) {
+      if (!id) return false // Cannot delete if no document ID
+
+      const doc = (await payload.findByID({
+        collection,
+        id: typeof id === 'string' ? id : String(id),
+        depth: 0,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      })) as any
+
+      // Legacy documents (no createdBy): allow delete
+      if (!doc?.createdBy) {
+        return true
+      }
+
+      // New documents: check ownership
+      const createdById =
+        typeof doc.createdBy === 'string' ? doc.createdBy : doc.createdBy?.id || doc.createdBy
+
+      return String(createdById) === String(user.id)
+    }
+
+    return false
+  }
+}
+
+/**
+ * Can update documents
+ * - Admin: can update anything
+ * - Editor: can update own documents, Contributor documents, OR legacy documents (no createdBy)
+ * - Contributor: can update own documents OR legacy documents (no createdBy)
+ * - Viewer: cannot update
+ */
+export const canUpdate = (collection: CollectionSlug): Access => {
+  return async ({ req: { user, payload }, id }) => {
+    if (!user) return false
+
+    // Admin can update anything
+    if (user.role === 'admin') return true
+
+    // Editor can update own documents, Contributor documents, or legacy documents
+    if (user.role === 'editor') {
+      if (!id) return true // Creating new document
+
+      const doc = (await payload.findByID({
+        collection,
+        id: typeof id === 'string' ? id : id ? String(id) : '',
+        depth: 0,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      })) as any
+
+      // Legacy documents (no createdBy): allow update
+      if (!doc?.createdBy) {
+        return true
+      }
+
+      const createdById =
+        typeof doc.createdBy === 'string' ? doc.createdBy : doc.createdBy?.id || doc.createdBy
+
+      const currentUserId = String(user.id)
+
+      // Editors can update their own documents
+      if (String(createdById) === currentUserId) {
+        return true
+      }
+
+      // Or documents created by Contributors
+      try {
+        const creator = await payload.findByID({
+          collection: 'users',
+          id: String(createdById),
+          depth: 0,
+        })
+
+        const creatorUser = creator as User
+        if (creatorUser && creatorUser.role === 'contributor') {
+          return true
+        }
+      } catch {
+        return false
+      }
+
+      return false
+    }
+
+    // Contributor can update own documents OR legacy documents (no createdBy)
+    if (user.role === 'contributor') {
+      if (!id) return true // Creating new document
+
+      const doc = (await payload.findByID({
+        collection,
+        id: typeof id === 'string' ? id : id ? String(id) : '',
+        depth: 0,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      })) as any
+
+      if (!doc?.createdBy) {
+        return true
+      }
+
+      const createdById =
+        typeof doc.createdBy === 'string' ? doc.createdBy : doc.createdBy?.id || doc.createdBy
+
+      return String(createdById) === String(user.id)
+    }
+
+    return false
+  }
+}
+
+/**
+ * Can create documents
+ * - Admin, Editor, Contributor: can create
+ * - Viewer: cannot create
+ */
+export const canCreate: Access = hasRole(['admin', 'editor', 'contributor'])
+
+/**
+ * Can publish documents (admin and editor only)
+ */
+export const canPublish: Access = hasRole(['admin', 'editor'])
+
+/**
+ * User management (admin only)
+ * Returns boolean for Users collection access
+ */
+export const canManageUsers = ({ req: { user } }: AccessArgs<User>): boolean => {
+  return Boolean(user && user.role === 'admin')
+}
+
+/**
+ * Can read users
+ * - Admin: can read all users
+ * - Editor/Contributor: can read user records (for relationship population)
+ * - Analyst/Viewer/etc: can read only their own record
+ */
+export const canReadUsers: Access = ({ req: { user }, id }) => {
+  if (!user) return false
+
+  if (user.role === 'admin') return true
+
+  if (['editor'].includes(user.role || '')) {
+    return true
+  }
+
+  if (!id) {
+    return {
+      id: {
+        equals: user.id,
+      },
+    }
+  }
+
+  const userId = typeof id === 'string' ? id : id !== undefined ? String(id) : ''
+  const currentUserId = typeof user.id === 'string' ? user.id : String(user.id)
+
+  return userId === currentUserId
+}
+
+/**
+ * Can update users
+ * - Admin: can update any user (including role/email)
+ * - Non-admin: can update ONLY their own user record
+ */
+export const canUpdateUsers: Access = ({ req: { user }, id }) => {
+  if (!user) return false
+
+  if (user.role === 'admin') return true
+
+  if (!id) {
+    return {
+      id: {
+        equals: user.id,
+      },
+    }
+  }
+
+  const targetId = typeof id === 'string' ? id : String(id)
+  const currentUserId = typeof user.id === 'string' ? user.id : String(user.id)
+
+  return targetId === currentUserId
+}
+
+/**
+ * Admin panel access control for non-submission collections
+ * - Admin, Editor, Contributor, Viewer: can access
+ * - Analyst: cannot access
+ */
+export const restrictAnalystAccess = ({ req: { user } }: AccessArgs<User>): boolean => {
+  if (!user) return false
+  if (user.role === 'analyst') return false
+  return true
+}
+
 // import type { Access, AccessArgs, CollectionSlug } from 'payload'
 
 // import type { User } from '@/payload-types'
@@ -509,239 +746,3 @@
 //   // Allow all other roles
 //   return true
 // }
-import type { Access, AccessArgs, CollectionSlug } from 'payload'
-import type { User } from '@/payload-types'
-
-/**
- * Check if user has one of the specified roles
- */
-export const hasRole = (roles: string[]) => {
-  return ({ req: { user } }: AccessArgs<User>): boolean => {
-    if (!user) return false
-    return roles.includes(user.role)
-  }
-}
-
-/**
- * Admin only access
- */
-export const adminOnly: Access = hasRole(['admin'])
-
-/**
- * Admin or Editor access
- */
-export const adminOrEditor: Access = hasRole(['admin', 'editor'])
-
-/**
- * Admin, Editor, or Analyst read access (for submission collections)
- */
-export const canReadSubmissions: Access = hasRole(['admin', 'editor', 'analyst'])
-
-/**
- * Can delete documents
- * - Admin: can delete anything
- * - Editor: can delete own documents OR legacy documents (no createdBy)
- * - Contributor: can delete own documents OR legacy documents (no createdBy)
- * - Viewer: cannot delete
- */
-export const canDelete = (collection: CollectionSlug): Access => {
-  return async ({ req: { user, payload }, id }) => {
-    if (!user) return false
-
-    // Admin can delete anything
-    if (user.role === 'admin') return true
-
-    // Editor and Contributor can delete own documents OR legacy documents (no createdBy)
-    if (['editor', 'contributor'].includes(user.role || '')) {
-      if (!id) return false // Cannot delete if no document ID
-
-      const doc = (await payload.findByID({
-        collection,
-        id: typeof id === 'string' ? id : String(id),
-        depth: 0,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      })) as any
-
-      // Legacy documents (no createdBy): allow delete
-      if (!doc?.createdBy) {
-        return true
-      }
-
-      // New documents: check ownership
-      const createdById =
-        typeof doc.createdBy === 'string' ? doc.createdBy : doc.createdBy?.id || doc.createdBy
-
-      return String(createdById) === String(user.id)
-    }
-
-    return false
-  }
-}
-
-/**
- * Can update documents
- * - Admin: can update anything
- * - Editor: can update own documents, Contributor documents, OR legacy documents (no createdBy)
- * - Contributor: can update own documents OR legacy documents (no createdBy)
- * - Viewer: cannot update
- */
-export const canUpdate = (collection: CollectionSlug): Access => {
-  return async ({ req: { user, payload }, id }) => {
-    if (!user) return false
-
-    // Admin can update anything
-    if (user.role === 'admin') return true
-
-    // Editor can update own documents, Contributor documents, or legacy documents
-    if (user.role === 'editor') {
-      if (!id) return true // Creating new document
-
-      const doc = (await payload.findByID({
-        collection,
-        id: typeof id === 'string' ? id : id ? String(id) : '',
-        depth: 0,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      })) as any
-
-      // Legacy documents (no createdBy): allow update
-      if (!doc?.createdBy) {
-        return true
-      }
-
-      const createdById =
-        typeof doc.createdBy === 'string' ? doc.createdBy : doc.createdBy?.id || doc.createdBy
-
-      const currentUserId = String(user.id)
-
-      // Editors can update their own documents
-      if (String(createdById) === currentUserId) {
-        return true
-      }
-
-      // Or documents created by Contributors
-      try {
-        const creator = await payload.findByID({
-          collection: 'users',
-          id: String(createdById),
-          depth: 0,
-        })
-
-        const creatorUser = creator as User
-        if (creatorUser && creatorUser.role === 'contributor') {
-          return true
-        }
-      } catch {
-        return false
-      }
-
-      return false
-    }
-
-    // Contributor can update own documents OR legacy documents (no createdBy)
-    if (user.role === 'contributor') {
-      if (!id) return true // Creating new document
-
-      const doc = (await payload.findByID({
-        collection,
-        id: typeof id === 'string' ? id : id ? String(id) : '',
-        depth: 0,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      })) as any
-
-      if (!doc?.createdBy) {
-        return true
-      }
-
-      const createdById =
-        typeof doc.createdBy === 'string' ? doc.createdBy : doc.createdBy?.id || doc.createdBy
-
-      return String(createdById) === String(user.id)
-    }
-
-    return false
-  }
-}
-
-/**
- * Can create documents
- * - Admin, Editor, Contributor: can create
- * - Viewer: cannot create
- */
-export const canCreate: Access = hasRole(['admin', 'editor', 'contributor'])
-
-/**
- * Can publish documents (admin and editor only)
- */
-export const canPublish: Access = hasRole(['admin', 'editor'])
-
-/**
- * User management (admin only)
- * Returns boolean for Users collection access
- */
-export const canManageUsers = ({ req: { user } }: AccessArgs<User>): boolean => {
-  return Boolean(user && user.role === 'admin')
-}
-
-/**
- * Can read users
- * - Admin: can read all users
- * - Editor/Contributor: can read user records (for relationship population)
- * - Analyst/Viewer/etc: can read only their own record
- */
-export const canReadUsers: Access = ({ req: { user }, id }) => {
-  if (!user) return false
-
-  if (user.role === 'admin') return true
-
-  if (['editor'].includes(user.role || '')) {
-    return true
-  }
-
-  if (!id) {
-    return {
-      id: {
-        equals: user.id,
-      },
-    }
-  }
-
-  const userId = typeof id === 'string' ? id : id !== undefined ? String(id) : ''
-  const currentUserId = typeof user.id === 'string' ? user.id : String(user.id)
-
-  return userId === currentUserId
-}
-
-/**
- * Can update users
- * - Admin: can update any user (including role/email)
- * - Non-admin: can update ONLY their own user record
- */
-export const canUpdateUsers: Access = ({ req: { user }, id }) => {
-  if (!user) return false
-
-  if (user.role === 'admin') return true
-
-  if (!id) {
-    return {
-      id: {
-        equals: user.id,
-      },
-    }
-  }
-
-  const targetId = typeof id === 'string' ? id : String(id)
-  const currentUserId = typeof user.id === 'string' ? user.id : String(user.id)
-
-  return targetId === currentUserId
-}
-
-/**
- * Admin panel access control for non-submission collections
- * - Admin, Editor, Contributor, Viewer: can access
- * - Analyst: cannot access
- */
-export const restrictAnalystAccess = ({ req: { user } }: AccessArgs<User>): boolean => {
-  if (!user) return false
-  if (user.role === 'analyst') return false
-  return true
-}

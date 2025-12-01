@@ -3,6 +3,7 @@ import type { CollectionConfig } from 'payload'
 import { anyone } from '../access/anyone'
 import { authenticated } from '../access/authenticated'
 import { slugField } from 'payload'
+import { restrictAnalystAccess } from '@/access/role'
 
 export const Categories: CollectionConfig = {
   slug: 'categories',
@@ -11,6 +12,7 @@ export const Categories: CollectionConfig = {
     delete: authenticated,
     read: anyone,
     update: authenticated,
+    admin: restrictAnalystAccess,
   },
   admin: {
     useAsTitle: 'title',

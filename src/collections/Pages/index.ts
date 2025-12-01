@@ -20,14 +20,19 @@ import {
   OverviewField,
   PreviewField,
 } from '@payloadcms/plugin-seo/fields'
+import { canCreate, canDelete, canUpdate } from '@/access/role'
 
 export const Pages: CollectionConfig<'pages'> = {
   slug: 'pages',
   access: {
-    create: authenticated,
-    delete: authenticated,
-    read: authenticatedOrPublished,
-    update: authenticated,
+    // create: authenticated,
+    // delete: authenticated,
+    // read: authenticatedOrPublished,
+    // update: authenticated,
+    read: () => true, // everyone can read pages
+    create: canCreate, // admin, editor, contributor
+    update: canUpdate('pages'), // admin, editor, contributor (own)
+    delete: canDelete('pages'),
   },
   // This config controls what's populated by default when a page is referenced
   // https://payloadcms.com/docs/queries/select#defaultpopulate-collection-config-property
