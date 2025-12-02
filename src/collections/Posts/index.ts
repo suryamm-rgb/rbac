@@ -26,15 +26,23 @@ import {
   PreviewField,
 } from '@payloadcms/plugin-seo/fields'
 import { slugField } from 'payload'
+import { canCreate, canDelete, canUpdate } from '@/access/role'
+import { restrictPublish } from '@/hooks/restrictPublish'
+import { populatePublishedAt } from '@/hooks/populatePublishedAt'
 
 export const Posts: CollectionConfig<'posts'> = {
   slug: 'posts',
   access: {
-    create: authenticated,
-    delete: authenticated,
+    // create: authenticated,
+    // delete: authenticated,
+    // read: authenticatedOrPublished,
+    // update: authenticated,
+    create: canCreate,
+    delete: canDelete('posts'),
     read: authenticatedOrPublished,
-    update: authenticated,
+    update: canUpdate('posts'),
   },
+
   // This config controls what's populated by default when a post is referenced
   // https://payloadcms.com/docs/queries/select#defaultpopulate-collection-config-property
   // Type safe if the collection slug generic is passed to `CollectionConfig` - `CollectionConfig<'posts'>
@@ -217,6 +225,7 @@ export const Posts: CollectionConfig<'posts'> = {
     slugField(),
   ],
   hooks: {
+    beforeChange: [restrictPublish('pages'), populatePublishedAt],
     afterChange: [revalidatePost],
     afterRead: [populateAuthors],
     afterDelete: [revalidateDelete],

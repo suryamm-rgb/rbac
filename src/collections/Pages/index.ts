@@ -1,6 +1,5 @@
-import type { CollectionConfig } from 'payload'
+import type { CollectionBeforeChangeHook, CollectionConfig } from 'payload'
 
-import { authenticated } from '../../access/authenticated'
 import { authenticatedOrPublished } from '../../access/authenticatedOrPublished'
 import { Archive } from '../../blocks/ArchiveBlock/config'
 import { CallToAction } from '../../blocks/CallToAction/config'
@@ -20,23 +19,52 @@ import {
   OverviewField,
   PreviewField,
 } from '@payloadcms/plugin-seo/fields'
-import { canCreate, canDelete, canUpdate } from '@/access/role'
+import { canCreate, canDelete, canUpdate, restrictAnalystAccess } from '@/access/role'
+import { restrictPublish } from '@/hooks/restrictPublish'
+import type { User } from '@/payload-types'
+
+/**
+ * Hook to automatically set/keep createdBy on pages
+ */
+const setCreatedBy: CollectionBeforeChangeHook = async ({ data, req, operation, originalDoc }) => {
+  const user = req.user as User | undefined
+  if (!user) return data
+
+  // On create, always set createdBy to current user
+  if (operation === 'create') {
+    return {
+      ...data,
+      createdBy: user.id,
+    }
+  }
+
+  // On update, preserve existing createdBy if present
+  const existingCreatedBy = (originalDoc as any)?.createdBy
+  if (existingCreatedBy) {
+    return {
+      ...data,
+      createdBy: existingCreatedBy,
+    }
+  }
+
+  // If for some reason there was no createdBy, set it now
+  return {
+    ...data,
+    createdBy: user.id,
+  }
+}
 
 export const Pages: CollectionConfig<'pages'> = {
   slug: 'pages',
   access: {
-    // create: authenticated,
-    // delete: authenticated,
-    // read: authenticatedOrPublished,
-    // update: authenticated,
-    read: () => true, // everyone can read pages
-    create: canCreate, // admin, editor, contributor
-    update: canUpdate('pages'), // admin, editor, contributor (own)
+    create: canCreate,
     delete: canDelete('pages'),
+    update: canUpdate('pages'),
+    read: authenticatedOrPublished,
+    admin: restrictAnalystAccess,
   },
   // This config controls what's populated by default when a page is referenced
   // https://payloadcms.com/docs/queries/select#defaultpopulate-collection-config-property
-  // Type safe if the collection slug generic is passed to `CollectionConfig` - `CollectionConfig<'pages'>
   defaultPopulate: {
     title: true,
     slug: true,
@@ -64,6 +92,23 @@ export const Pages: CollectionConfig<'pages'> = {
       name: 'title',
       type: 'text',
       required: true,
+    },
+    // Track who created the page
+    {
+      name: 'createdBy',
+      type: 'relationship',
+      relationTo: 'users',
+      required: false,
+      admin: {
+        readOnly: true,
+        position: 'sidebar',
+        description: 'User who originally created this page.',
+      },
+      access: {
+        // Only set via hooks; user cannot change directly
+        create: () => false,
+        update: () => false,
+      },
     },
     {
       type: 'tabs',
@@ -104,10 +149,7 @@ export const Pages: CollectionConfig<'pages'> = {
 
             MetaDescriptionField({}),
             PreviewField({
-              // if the `generateUrl` function is configured
               hasGenerateFn: true,
-
-              // field paths to match the target field for data
               titlePath: 'meta.title',
               descriptionPath: 'meta.description',
             }),
@@ -125,14 +167,14 @@ export const Pages: CollectionConfig<'pages'> = {
     slugField(),
   ],
   hooks: {
+    beforeChange: [setCreatedBy, restrictPublish('pages'), populatePublishedAt],
     afterChange: [revalidatePage],
-    beforeChange: [populatePublishedAt],
     afterDelete: [revalidateDelete],
   },
   versions: {
     drafts: {
       autosave: {
-        interval: 100, // We set this interval for optimal live preview
+        interval: 100,
       },
       schedulePublish: true,
     },
